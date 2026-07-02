@@ -14,7 +14,7 @@ use Hydra\Session\Contracts\SessionInterface;
  * so the guard itself is stateless — every instance reads and writes the one
  * token under the one session, and nothing needs to bind or share it. That is
  * why the package ships no ServiceProvider: the guard autowires from the session
- * binding, exactly as hydra/validation's stateless Validator does.
+ * binding, exactly as hydrakit/validation's stateless Validator does.
  *
  * The token is minted lazily on first {@see token()} (typically when a view
  * renders a form or the layout's meta tag) and is then stable for the life of

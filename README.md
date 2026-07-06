@@ -15,8 +15,10 @@ of the session. It's hex, so it's safe to embed in HTML attributes, JSON
 
 `VerifyCsrfTokenMiddleware` lets safe methods (GET/HEAD/OPTIONS) through
 untouched — a GET is what mints the token in the first place — and requires a
-matching token on every POST/PUT/PATCH/DELETE, else a 403 before the request
-reaches a controller. The token is read from the `X-CSRF-Token` header first
+matching token on **every other** method (POST/PUT/PATCH/DELETE, but also any
+WebDAV or custom verb — the safe list is an allowlist, so unknown verbs fail
+closed), else a 403 before the request reaches a controller. The token is read
+from the `X-CSRF-Token` header first
 (htmx and AJAX clients send it automatically once the layout is wired) and falls
 back to the `_token` form field.
 
@@ -25,6 +27,22 @@ back to the `_token` form field.
 
 ## Rotating
 
+OWASP recommends rotating the CSRF token on authentication. Note that
 `SessionInterface::regenerate()` keeps the data, including this token, so the
-token survives a session-id rotation. If you want a fresh token on login, clear
-it there explicitly.
+token survives a session-id rotation — call `rotate()` explicitly:
+
+```php
+public function login(ServerRequestInterface $request): ResponseInterface
+{
+    // ... verify credentials ...
+
+    $session->regenerate(); // new session id (fixation defence)
+    $guard->rotate();       // new CSRF token (regenerate() alone keeps the old one)
+
+    return redirect('/dashboard');
+}
+```
+
+`rotate()` discards the stored token and mints, stores and returns a fresh one.
+Tokens embedded in already-rendered pages stop validating immediately, so call
+it where you're navigating anyway (the login POST handler).

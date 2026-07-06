@@ -74,6 +74,33 @@ final class CsrfGuardTest extends TestCase
         $this->assertFalse($guard->validate(bin2hex(random_bytes(32))));
     }
 
+    public function test_rotate_returns_a_fresh_token(): void
+    {
+        $guard = new CsrfGuard(new ArraySessionStore);
+        $old = $guard->token();
+
+        $new = $guard->rotate();
+
+        // A genuinely new token, well-formed like any minted one, and now the
+        // stable one for the session.
+        $this->assertNotSame($old, $new);
+        $this->assertSame(64, strlen($new));
+        $this->assertSame($new, $guard->token());
+    }
+
+    public function test_rotate_invalidates_the_old_token_and_honours_the_new(): void
+    {
+        // The login-rotation use case: after rotate(), a token captured before
+        // authentication must stop validating, while the fresh one works.
+        $guard = new CsrfGuard(new ArraySessionStore);
+        $old = $guard->token();
+
+        $new = $guard->rotate();
+
+        $this->assertFalse($guard->validate($old));
+        $this->assertTrue($guard->validate($new));
+    }
+
     public function test_a_second_guard_on_the_same_session_shares_the_token(): void
     {
         // The guard is stateless: all state lives in the session, so a separate

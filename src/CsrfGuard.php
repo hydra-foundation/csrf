@@ -18,9 +18,9 @@ use Hydra\Session\Contracts\SessionInterface;
  *
  * The token is minted lazily on first {@see token()} (typically when a view
  * renders a form or the layout's meta tag) and is then stable for the life of
- * the session. Rotate it by regenerating the session id on a privilege change —
- * {@see SessionInterface::regenerate()} keeps the data, including this token, so
- * if you want a fresh token on login, clear it there explicitly.
+ * the session. On a privilege change (login), rotate it explicitly with
+ * {@see rotate()} — regenerating the session id alone is not enough, because
+ * {@see SessionInterface::regenerate()} keeps the data, this token included.
  */
 final class CsrfGuard
 {
@@ -54,6 +54,28 @@ final class CsrfGuard
         }
 
         return $token;
+    }
+
+    /**
+     * Discard the current token and mint, store and return a fresh one.
+     *
+     * OWASP recommends rotating the CSRF token on authentication (login,
+     * privilege escalation) so a token a pre-auth attacker may have captured
+     * cannot forge post-auth requests. Note that regenerating the session id
+     * ({@see SessionInterface::regenerate()}) does NOT rotate this token — the
+     * session data survives the id change — which is exactly why this method
+     * exists: the session key is private, so without it an app would have to
+     * hardcode '_csrf_token' to force a fresh one.
+     *
+     * Any token embedded in already-rendered pages stops validating the moment
+     * this runs, so call it at the point you are navigating anyway (the login
+     * POST handler, before rendering the next page).
+     */
+    public function rotate(): string
+    {
+        $this->session->remove(self::SESSION_KEY);
+
+        return $this->token();
     }
 
     /**

@@ -100,10 +100,60 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
         }
     }
 
+    public function test_unknown_and_custom_verbs_are_guarded(): void
+    {
+        // The safe list is an ALLOWLIST: a verb the framework never anticipated
+        // (WebDAV's PROPFIND, a proxy's PURGE, anything custom) must fail closed
+        // and require a token, not slip past an unsafe-method blocklist.
+        foreach (['PROPFIND', 'PURGE', 'X-CUSTOM'] as $method) {
+            $guard = new CsrfGuard(new ArraySessionStore);
+            $guard->token();
+            $middleware = new VerifyCsrfTokenMiddleware($guard);
+            $handler = new RecordingHandler;
+
+            try {
+                $middleware->process($this->request($method, '/x'), $handler);
+                $this->fail("Expected {$method} without a token to be rejected.");
+            } catch (TokenMismatchException) {
+                $this->assertSame(0, $handler->calls, "{$method} reached the handler without a token");
+            }
+        }
+    }
+
+    public function test_lowercase_unsafe_method_is_still_guarded(): void
+    {
+        // Method comparison must be case-insensitive (strtoupper is load-bearing):
+        // a lowercase 'post' must not be mistaken for a non-listed safe verb —
+        // and, symmetrically, a lowercase 'get' must not lose its exemption.
+        $guard = new CsrfGuard(new ArraySessionStore);
+        $guard->token();
+        $middleware = new VerifyCsrfTokenMiddleware($guard);
+        $handler = new RecordingHandler;
+
+        $this->expectException(TokenMismatchException::class);
+
+        try {
+            $middleware->process($this->request('post', '/x'), $handler);
+        } finally {
+            $this->assertSame(0, $handler->calls);
+        }
+    }
+
+    public function test_lowercase_safe_method_passes_without_a_token(): void
+    {
+        $guard = new CsrfGuard(new ArraySessionStore);
+        $middleware = new VerifyCsrfTokenMiddleware($guard);
+        $handler = new RecordingHandler;
+
+        $middleware->process($this->request('get', '/x'), $handler);
+
+        $this->assertSame(1, $handler->calls);
+    }
+
     public function test_every_unsafe_method_is_guarded(): void
     {
-        // POST is exercised throughout; this locks the rest of the UNSAFE set so
-        // adding/removing a verb can't silently leave a mutating method open.
+        // POST is exercised throughout; this locks the other classic mutating
+        // verbs so a change to the safe allowlist can't silently exempt one.
         foreach (['PUT', 'PATCH', 'DELETE'] as $method) {
             $guard = new CsrfGuard(new ArraySessionStore);
             $token = $guard->token();

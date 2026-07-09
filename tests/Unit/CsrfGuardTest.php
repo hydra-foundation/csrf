@@ -17,7 +17,7 @@ final class CsrfGuardTest extends TestCase
 {
     public function test_token_is_minted_once_and_stable(): void
     {
-        $guard = new CsrfGuard(new ArraySessionStore);
+        $guard = new CsrfGuard($this->startedStore());
 
         $first = $guard->token();
         $second = $guard->token();
@@ -32,15 +32,15 @@ final class CsrfGuardTest extends TestCase
 
     public function test_distinct_sessions_get_distinct_tokens(): void
     {
-        $a = (new CsrfGuard(new ArraySessionStore))->token();
-        $b = (new CsrfGuard(new ArraySessionStore))->token();
+        $a = (new CsrfGuard($this->startedStore()))->token();
+        $b = (new CsrfGuard($this->startedStore()))->token();
 
         $this->assertNotSame($a, $b);
     }
 
     public function test_validate_accepts_the_minted_token(): void
     {
-        $guard = new CsrfGuard(new ArraySessionStore);
+        $guard = new CsrfGuard($this->startedStore());
         $token = $guard->token();
 
         $this->assertTrue($guard->validate($token));
@@ -48,7 +48,7 @@ final class CsrfGuardTest extends TestCase
 
     public function test_validate_rejects_a_wrong_token(): void
     {
-        $guard = new CsrfGuard(new ArraySessionStore);
+        $guard = new CsrfGuard($this->startedStore());
         $guard->token();
 
         $this->assertFalse($guard->validate('not-the-token'));
@@ -56,7 +56,7 @@ final class CsrfGuardTest extends TestCase
 
     public function test_validate_rejects_null_and_empty(): void
     {
-        $guard = new CsrfGuard(new ArraySessionStore);
+        $guard = new CsrfGuard($this->startedStore());
         $guard->token();
 
         $this->assertFalse($guard->validate(null));
@@ -67,7 +67,7 @@ final class CsrfGuardTest extends TestCase
     {
         // No token has been issued for this session, so nothing can validate —
         // not even a plausible-looking value. validate() must not mint one.
-        $store = new ArraySessionStore;
+        $store = $this->startedStore();
         $guard = new CsrfGuard($store);
 
         $this->assertFalse($guard->validate('anything'));
@@ -76,7 +76,7 @@ final class CsrfGuardTest extends TestCase
 
     public function test_rotate_returns_a_fresh_token(): void
     {
-        $guard = new CsrfGuard(new ArraySessionStore);
+        $guard = new CsrfGuard($this->startedStore());
         $old = $guard->token();
 
         $new = $guard->rotate();
@@ -92,7 +92,7 @@ final class CsrfGuardTest extends TestCase
     {
         // The login-rotation use case: after rotate(), a token captured before
         // authentication must stop validating, while the fresh one works.
-        $guard = new CsrfGuard(new ArraySessionStore);
+        $guard = new CsrfGuard($this->startedStore());
         $old = $guard->token();
 
         $new = $guard->rotate();
@@ -106,9 +106,18 @@ final class CsrfGuardTest extends TestCase
         // The guard is stateless: all state lives in the session, so a separate
         // instance (e.g. the one in the view vs the one in the middleware) reads
         // and validates the very same token.
-        $store = new ArraySessionStore;
+        $store = $this->startedStore();
         $minted = (new CsrfGuard($store))->token();
 
         $this->assertTrue((new CsrfGuard($store))->validate($minted));
+    }
+
+    /** The store as the middleware hands it to request code: already started. */
+    private function startedStore(): ArraySessionStore
+    {
+        $store = new ArraySessionStore;
+        $store->start();
+
+        return $store;
     }
 }

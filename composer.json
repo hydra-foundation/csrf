@@ -26,6 +26,7 @@
     ],
     "require": {
         "php": ">=8.2",
+        "hydrakit/core": "^0.1",
         "hydrakit/http": "^0.1",
         "hydrakit/session": "^0.1",
         "psr/http-message": "^2.0",

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hydra\Csrf\Tests\Unit;
 
+use Hydra\Core\Security\Signer;
 use Hydra\Csrf\CsrfGuard;
 use Hydra\Csrf\Exceptions\TokenMismatchException;
 use Hydra\Csrf\VerifyCsrfTokenMiddleware;
@@ -18,7 +19,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
 {
     public function test_safe_methods_pass_through_without_a_token(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
 
@@ -32,7 +33,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
 
     public function test_unsafe_method_with_a_valid_token_in_the_header_passes(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $token = $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -45,7 +46,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
 
     public function test_unsafe_method_with_a_valid_token_in_the_form_field_passes(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $token = $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -58,7 +59,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
 
     public function test_unsafe_method_without_a_token_is_rejected(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -75,7 +76,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
 
     public function test_unsafe_method_with_a_wrong_token_is_rejected(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -88,7 +89,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
 
     public function test_rejection_carries_a_403_status(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
 
@@ -106,7 +107,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
         // (WebDAV's PROPFIND, a proxy's PURGE, anything custom) must fail closed
         // and require a token, not slip past an unsafe-method blocklist.
         foreach (['PROPFIND', 'PURGE', 'X-CUSTOM'] as $method) {
-            $guard = new CsrfGuard($this->startedStore());
+            $guard = $this->guard();
             $guard->token();
             $middleware = new VerifyCsrfTokenMiddleware($guard);
             $handler = new RecordingHandler;
@@ -125,7 +126,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
         // Method comparison must be case-insensitive (strtoupper is load-bearing):
         // a lowercase 'post' must not be mistaken for a non-listed safe verb —
         // and, symmetrically, a lowercase 'get' must not lose its exemption.
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -141,7 +142,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
 
     public function test_lowercase_safe_method_passes_without_a_token(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
 
@@ -155,7 +156,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
         // POST is exercised throughout; this locks the other classic mutating
         // verbs so a change to the safe allowlist can't silently exempt one.
         foreach (['PUT', 'PATCH', 'DELETE'] as $method) {
-            $guard = new CsrfGuard($this->startedStore());
+            $guard = $this->guard();
             $token = $guard->token();
             $middleware = new VerifyCsrfTokenMiddleware($guard);
 
@@ -181,7 +182,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
         // getHeaderLine() returns '' for both absent and present-but-empty, so an
         // empty header must not short-circuit the field lookup — otherwise a
         // client that sends an empty X-CSRF-Token could never use the form field.
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $token = $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -198,7 +199,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
     {
         // PSR-7's getParsedBody() can be null or an object; neither carries a
         // field, so the request must be rejected rather than TypeError.
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -219,7 +220,7 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
         // A valid header wins even when the body field is junk — the htmx path
         // (auto-header) should not be defeated by a stale field, and vice versa
         // a valid field is enough when no header is sent (covered above).
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $token = $guard->token();
         $middleware = new VerifyCsrfTokenMiddleware($guard);
         $handler = new RecordingHandler;
@@ -235,6 +236,15 @@ final class VerifyCsrfTokenMiddlewareTest extends TestCase
     private function request(string $method, string $path): ServerRequestInterface
     {
         return (new Psr17Factory)->createServerRequest($method, $path);
+    }
+
+    /** A guard over a fresh started store, signing under a fixed test key. */
+    private function guard(): CsrfGuard
+    {
+        return new CsrfGuard(
+            $this->startedStore(),
+            Signer::fromHex('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'),
+        );
     }
 
     /** The store as the middleware hands it to request code: already started. */

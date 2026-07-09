@@ -4,20 +4,25 @@ declare(strict_types=1);
 
 namespace Hydra\Csrf\Tests\Unit;
 
+use Hydra\Core\Security\Signer;
 use Hydra\Csrf\CsrfGuard;
 use Hydra\Session\Stores\ArraySessionStore;
 use PHPUnit\Framework\TestCase;
 
 /**
  * The guard is exercised against the real in-memory ArraySessionStore — the same
- * reference backend the session package tests with — so these prove the actual
- * session read/write path, not a mock of it.
+ * reference backend the session package tests with — and a real {@see Signer}
+ * under a fixed test key, so these prove the actual session read/write and
+ * sign/verify paths, not mocks of them.
  */
 final class CsrfGuardTest extends TestCase
 {
+    /** A fixed 64-hex (32-byte) key so signatures are reproducible across guards. */
+    private const KEY_HEX = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
+
     public function test_token_is_minted_once_and_stable(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
 
         $first = $guard->token();
         $second = $guard->token();
@@ -25,22 +30,34 @@ final class CsrfGuardTest extends TestCase
         // Lazily minted, then stable for the life of the session.
         $this->assertNotSame('', $first);
         $this->assertSame($first, $second);
-        // 32 bytes of entropy rendered as hex.
-        $this->assertSame(64, strlen($first));
-        $this->assertSame(1, preg_match('/^[0-9a-f]+$/', $first));
+        // Emitted as "<64-hex-hmac>.<64-hex-token>" — signed, not the bare token.
+        $this->assertSame(1, preg_match('/^[0-9a-f]{64}\.[0-9a-f]{64}$/', $first));
+    }
+
+    public function test_emitted_token_is_signed_not_the_stored_value(): void
+    {
+        $store = $this->startedStore();
+        $emitted = $this->guard($store)->token();
+
+        // The session stores the raw random token; the guard emits it signed, so
+        // the two differ and the signature prefixes the stored value.
+        $stored = $store->get('_csrf_token');
+        $this->assertIsString($stored);
+        $this->assertNotSame($stored, $emitted);
+        $this->assertStringEndsWith('.' . $stored, $emitted);
     }
 
     public function test_distinct_sessions_get_distinct_tokens(): void
     {
-        $a = (new CsrfGuard($this->startedStore()))->token();
-        $b = (new CsrfGuard($this->startedStore()))->token();
+        $a = $this->guard()->token();
+        $b = $this->guard()->token();
 
         $this->assertNotSame($a, $b);
     }
 
     public function test_validate_accepts_the_minted_token(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $token = $guard->token();
 
         $this->assertTrue($guard->validate($token));
@@ -48,15 +65,41 @@ final class CsrfGuardTest extends TestCase
 
     public function test_validate_rejects_a_wrong_token(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
 
         $this->assertFalse($guard->validate('not-the-token'));
     }
 
+    public function test_validate_rejects_a_tampered_token(): void
+    {
+        // A validly-signed token whose message half is swapped for another
+        // session's stored value must fail — the signature no longer matches.
+        $guard = $this->guard();
+        $signed = $guard->token();
+
+        $forged = substr($signed, 0, 65) . bin2hex(random_bytes(32));
+
+        $this->assertFalse($guard->validate($forged));
+    }
+
+    public function test_validate_rejects_a_token_signed_under_a_different_key(): void
+    {
+        // Same underlying session token, but sealed with a foreign key: the
+        // guard's Signer cannot verify it, so it never reaches the store compare.
+        $store = $this->startedStore();
+        $guard = $this->guard($store);
+        $guard->token();
+        $stored = $store->get('_csrf_token');
+
+        $foreign = (new Signer(str_repeat('x', 32)))->sign((string) $stored);
+
+        $this->assertFalse($guard->validate($foreign));
+    }
+
     public function test_validate_rejects_null_and_empty(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
 
         $this->assertFalse($guard->validate(null));
@@ -66,17 +109,17 @@ final class CsrfGuardTest extends TestCase
     public function test_validate_is_false_before_any_token_is_minted(): void
     {
         // No token has been issued for this session, so nothing can validate —
-        // not even a plausible-looking value. validate() must not mint one.
-        $store = $this->startedStore();
-        $guard = new CsrfGuard($store);
+        // not even a value validly signed under this key. validate() must not
+        // mint one.
+        $guard = $this->guard();
 
         $this->assertFalse($guard->validate('anything'));
-        $this->assertFalse($guard->validate(bin2hex(random_bytes(32))));
+        $this->assertFalse($guard->validate($this->signer()->sign(bin2hex(random_bytes(32)))));
     }
 
     public function test_rotate_returns_a_fresh_token(): void
     {
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $old = $guard->token();
 
         $new = $guard->rotate();
@@ -84,7 +127,7 @@ final class CsrfGuardTest extends TestCase
         // A genuinely new token, well-formed like any minted one, and now the
         // stable one for the session.
         $this->assertNotSame($old, $new);
-        $this->assertSame(64, strlen($new));
+        $this->assertSame(1, preg_match('/^[0-9a-f]{64}\.[0-9a-f]{64}$/', $new));
         $this->assertSame($new, $guard->token());
     }
 
@@ -92,7 +135,7 @@ final class CsrfGuardTest extends TestCase
     {
         // The login-rotation use case: after rotate(), a token captured before
         // authentication must stop validating, while the fresh one works.
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $old = $guard->token();
 
         $new = $guard->rotate();
@@ -103,20 +146,20 @@ final class CsrfGuardTest extends TestCase
 
     public function test_a_second_guard_on_the_same_session_shares_the_token(): void
     {
-        // The guard is stateless: all state lives in the session, so a separate
-        // instance (e.g. the one in the view vs the one in the middleware) reads
-        // and validates the very same token.
+        // The guard is stateless: all state lives in the session and both guards
+        // sign under the same key, so a separate instance (e.g. the one in the
+        // view vs the one in the middleware) validates the very same token.
         $store = $this->startedStore();
-        $minted = (new CsrfGuard($store))->token();
+        $minted = $this->guard($store)->token();
 
-        $this->assertTrue((new CsrfGuard($store))->validate($minted));
+        $this->assertTrue($this->guard($store)->validate($minted));
     }
 
     public function test_issued_is_false_until_a_token_is_minted(): void
     {
         // A fresh session (the expired-session symptom an app's error policy
         // keys on: no token here can ever validate) reports not-issued...
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
 
         $this->assertFalse($guard->issued());
 
@@ -127,8 +170,7 @@ final class CsrfGuardTest extends TestCase
 
     public function test_issued_is_read_only_and_never_mints(): void
     {
-        $store = $this->startedStore();
-        $guard = new CsrfGuard($store);
+        $guard = $this->guard();
 
         $guard->issued();
         $guard->issued();
@@ -141,12 +183,22 @@ final class CsrfGuardTest extends TestCase
     public function test_issued_survives_rotation(): void
     {
         // rotate() replaces the token, it never leaves the session bare.
-        $guard = new CsrfGuard($this->startedStore());
+        $guard = $this->guard();
         $guard->token();
 
         $guard->rotate();
 
         $this->assertTrue($guard->issued());
+    }
+
+    private function guard(?ArraySessionStore $store = null): CsrfGuard
+    {
+        return new CsrfGuard($store ?? $this->startedStore(), $this->signer());
+    }
+
+    private function signer(): Signer
+    {
+        return Signer::fromHex(self::KEY_HEX);
     }
 
     /** The store as the middleware hands it to request code: already started. */

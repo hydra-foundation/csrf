@@ -3,15 +3,27 @@
 Synchronizer-token CSRF protection: one secret token per session, compared in
 constant time against whatever an unsafe request submits. State lives entirely
 in the session, so the guard is stateless and the package ships **no**
-`ServiceProvider` — the guard autowires from the session binding.
+`ServiceProvider` — the guard autowires from the session and `Signer` bindings.
 
 ## How it works
 
-`CsrfGuard::token()` mints the token lazily on first read (typically when a view
-renders a form or the layout's meta tag) and returns the same value for the life
-of the session. It's hex, so it's safe to embed in HTML attributes, JSON
+`CsrfGuard::token()` mints a random token lazily on first read (typically when a
+view renders a form or the layout's meta tag) and returns a stable value for the
+life of the session. The random token is stored in the session (the synchronizer
+source of truth); what `token()` **emits** is that value HMAC-signed with
+`APP_KEY` via `Hydra\Core\Security\Signer`, as `<hmac>.<token>`. It's all
+URL/HTML/header-safe characters, so it embeds in HTML attributes, JSON
 (`hx-headers`), and headers without further encoding. `validate()` is read-only
-— it compares with `hash_equals` and never mints.
+— it verifies the signature first (a forged or tampered value is rejected on a
+cheap recompute), then compares the recovered token to the stored one with
+`hash_equals`, and never mints.
+
+Signing is defence-in-depth over the synchronizer store, not a replacement for
+it, and it makes `APP_KEY` load-bearing on the framework's own security path: the
+guard takes a `Signer` (bound by the app's `SignerServiceProvider` from
+`APP_KEY`), so a missing or malformed key fails loud the first time a token is
+minted. The guard still ships no `ServiceProvider` — it autowires from the
+session and `Signer` bindings.
 
 `VerifyCsrfTokenMiddleware` lets safe methods (GET/HEAD/OPTIONS) through
 untouched — a GET is what mints the token in the first place — and requires a

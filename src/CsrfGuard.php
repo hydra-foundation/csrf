@@ -4,17 +4,26 @@ declare(strict_types=1);
 
 namespace Hydra\Csrf;
 
+use Hydra\Core\Security\Signer;
 use Hydra\Session\Contracts\SessionInterface;
 
 /**
  * The synchronizer-token guard: one secret token per session, compared in
  * constant time against whatever an unsafe request submits.
  *
- * All of its state lives in the (already session-scoped) {@see SessionInterface},
- * so the guard itself is stateless — every instance reads and writes the one
- * token under the one session, and nothing needs to bind or share it. That is
- * why the package ships no ServiceProvider: the guard autowires from the session
- * binding, exactly as hydrakit/validation's stateless Validator does.
+ * The random token is the source of truth (stored in the session, unsigned);
+ * what the guard EMITS is that token HMAC-signed with APP_KEY via {@see Signer}.
+ * Signing is defense-in-depth over the synchronizer store, not a replacement for
+ * it: a submitted value whose signature doesn't verify is rejected on a cheap
+ * recompute before the session compare, and it makes APP_KEY genuinely
+ * load-bearing on the framework's own security path. The stored value stays raw,
+ * so the store remains the thing that ultimately decides validity.
+ *
+ * All of its state lives in the (already session-scoped) {@see SessionInterface}
+ * — the Signer is a stateless collaborator — so every instance reads and writes
+ * the one token under the one session. The package ships no ServiceProvider: the
+ * guard autowires from the session and Signer bindings, exactly as
+ * hydrakit/validation's stateless Validator does.
  *
  * The token is minted lazily on first {@see token()} (typically when a view
  * renders a form or the layout's meta tag) and is then stable for the life of
@@ -36,13 +45,18 @@ final class CsrfGuard
     /** Token entropy in bytes; 32 bytes → a 64-char hex string. */
     private const TOKEN_BYTES = 32;
 
-    public function __construct(private readonly SessionInterface $session) {}
+    public function __construct(
+        private readonly SessionInterface $session,
+        private readonly Signer $signer,
+    ) {}
 
     /**
-     * The session's CSRF token, minted on first read and stable thereafter.
-     * Safe to call on every render — repeated calls within a session return the
-     * same value. The token is hex, so it is safe to embed in HTML attributes,
-     * JSON (hx-headers) and headers without further encoding.
+     * The session's CSRF token, signed for emission: minted on first read and
+     * stable thereafter. Safe to call on every render — repeated calls within a
+     * session return an equivalent value (the same underlying token, re-signed).
+     * The result is "<hmac>.<hex-token>", all URL/HTML/header-safe characters, so
+     * it embeds in HTML attributes, JSON (hx-headers) and headers without further
+     * encoding.
      */
     public function token(): string
     {
@@ -53,7 +67,7 @@ final class CsrfGuard
             $this->session->set(self::SESSION_KEY, $token);
         }
 
-        return $token;
+        return $this->signer->sign($token);
     }
 
     /**
@@ -97,16 +111,25 @@ final class CsrfGuard
     }
 
     /**
-     * Whether $submitted matches the session token, compared in constant time
-     * with hash_equals so a mismatch leaks no timing signal.
+     * Whether $submitted is a validly-signed token matching the session's stored
+     * token. The signature is verified first (a forged or tampered value fails
+     * here, cheaply), then the recovered token is compared to the stored one in
+     * constant time with hash_equals so a mismatch leaks no timing signal.
      *
-     * Returns false when nothing was submitted, or when no token has been minted
-     * yet — a request can never validate against an absent token. Note this does
-     * NOT mint a token (unlike {@see token()}): validation is read-only.
+     * Returns false when nothing was submitted, when the signature does not
+     * verify, or when no token has been minted yet — a request can never validate
+     * against an absent token. Note this does NOT mint a token (unlike
+     * {@see token()}): validation is read-only.
      */
     public function validate(?string $submitted): bool
     {
         if ($submitted === null || $submitted === '') {
+            return false;
+        }
+
+        $verified = $this->signer->verify($submitted);
+
+        if ($verified === null) {
             return false;
         }
 
@@ -116,6 +139,6 @@ final class CsrfGuard
             return false;
         }
 
-        return hash_equals($token, $submitted);
+        return hash_equals($token, $verified);
     }
 }

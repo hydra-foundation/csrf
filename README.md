@@ -46,3 +46,51 @@ public function login(ServerRequestInterface $request): ResponseInterface
 `rotate()` discards the stored token and mints, stores and returns a fresh one.
 Tokens embedded in already-rendered pages stop validating immediately, so call
 it where you're navigating anyway (the login POST handler).
+
+## Expired sessions: redirect instead of a bare 403
+
+When a session expires (or its cookie is cleared) and the user then submits a
+form they loaded earlier, the fresh session knows no token, so the middleware
+rejects the POST — and without help the user sees a bare 403 where they
+expected the login page.
+
+The package's part is the **mechanism**: the middleware throws a distinct typed
+exception, `Hydra\Csrf\Exceptions\TokenMismatchException` (a 403
+`HttpException`), and never builds a response itself. What to DO about a
+mismatch is **policy**, and policy belongs to the app — the package owns no
+routes and cannot know where "log in" lives.
+
+The recipe: an app middleware placed **outside** `VerifyCsrfTokenMiddleware`
+(it can only catch what it wraps) but inside the session middleware catches the
+exception and asks `CsrfGuard::issued()` — read-only, never mints — whether the
+session has a token at all:
+
+- **no token issued** → the session cannot possibly validate anything: the
+  submit came from a form rendered by a session that no longer exists — the
+  expired-session symptom. Redirect to the login page.
+- **token issued but mismatched** → the session is alive and knows its token,
+  so the bad submission is a real CSRF failure (or a page rendered before an
+  explicit `rotate()`). Rethrow — the 403 is correct, and swallowing it would
+  blunt the protection.
+
+```php
+public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
+{
+    try {
+        return $handler->handle($request);
+    } catch (TokenMismatchException $e) {
+        if ($this->csrf->issued()) {
+            throw $e; // a live session with a bad token IS a CSRF failure: 403
+        }
+
+        return $this->respond->redirect('/login'); // expired session: log in again
+    }
+}
+```
+
+Deciding by `issued()` (not by asking the auth guard whether a user is logged
+in) keeps the policy middleware session-only and cheap: resolving the auth
+guard would drag the app's user provider — and its database connection — into
+every request just to serve a catch block that almost never fires. The
+reference app's `RedirectUnauthenticatedMiddleware` implements exactly this
+recipe (folded into the same middleware that maps auth's 401 to a redirect).

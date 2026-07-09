@@ -79,6 +79,24 @@ final class CsrfGuard
     }
 
     /**
+     * Whether this session has a token minted at all. Read-only — it never
+     * mints (unlike {@see token()}).
+     *
+     * This is the seam an app's error policy needs to tell the two faces of a
+     * token mismatch apart: a session WITHOUT a token cannot possibly validate
+     * anything — the classic symptom of an expired session behind a stale form
+     * (redirect the user to log in again) — while a mismatch against a token
+     * that IS issued is a genuine CSRF failure (keep the 403). See the README's
+     * "Expired sessions" recipe.
+     */
+    public function issued(): bool
+    {
+        $token = $this->session->get(self::SESSION_KEY);
+
+        return is_string($token) && $token !== '';
+    }
+
+    /**
      * Whether $submitted matches the session token, compared in constant time
      * with hash_equals so a mismatch leaks no timing signal.
      *

@@ -112,6 +112,43 @@ final class CsrfGuardTest extends TestCase
         $this->assertTrue((new CsrfGuard($store))->validate($minted));
     }
 
+    public function test_issued_is_false_until_a_token_is_minted(): void
+    {
+        // A fresh session (the expired-session symptom an app's error policy
+        // keys on: no token here can ever validate) reports not-issued...
+        $guard = new CsrfGuard($this->startedStore());
+
+        $this->assertFalse($guard->issued());
+
+        // ...and minting flips it, for THIS session only.
+        $guard->token();
+        $this->assertTrue($guard->issued());
+    }
+
+    public function test_issued_is_read_only_and_never_mints(): void
+    {
+        $store = $this->startedStore();
+        $guard = new CsrfGuard($store);
+
+        $guard->issued();
+        $guard->issued();
+
+        // No token appeared as a side effect: validate still refuses everything.
+        $this->assertFalse($guard->issued());
+        $this->assertFalse($guard->validate('anything'));
+    }
+
+    public function test_issued_survives_rotation(): void
+    {
+        // rotate() replaces the token, it never leaves the session bare.
+        $guard = new CsrfGuard($this->startedStore());
+        $guard->token();
+
+        $guard->rotate();
+
+        $this->assertTrue($guard->issued());
+    }
+
     /** The store as the middleware hands it to request code: already started. */
     private function startedStore(): ArraySessionStore
     {

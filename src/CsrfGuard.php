@@ -8,28 +8,10 @@ use Hydra\Core\Security\Signer;
 use Hydra\Session\Contracts\SessionInterface;
 
 /**
+ * CSRF Guard
+ *
  * The synchronizer-token guard: one secret token per session, compared in
- * constant time against whatever an unsafe request submits.
- *
- * The random token is the source of truth (stored in the session, unsigned);
- * what the guard EMITS is that token HMAC-signed with APP_KEY via {@see Signer}.
- * Signing is defense-in-depth over the synchronizer store, not a replacement for
- * it: a submitted value whose signature doesn't verify is rejected on a cheap
- * recompute before the session compare, and it makes APP_KEY genuinely
- * load-bearing on the framework's own security path. The stored value stays raw,
- * so the store remains the thing that ultimately decides validity.
- *
- * All of its state lives in the (already session-scoped) {@see SessionInterface}
- * — the Signer is a stateless collaborator — so every instance reads and writes
- * the one token under the one session. The package ships no ServiceProvider: the
- * guard autowires from the session and Signer bindings, exactly as
- * hydrakit/validation's stateless Validator does.
- *
- * The token is minted lazily on first {@see token()} (typically when a view
- * renders a form or the layout's meta tag) and is then stable for the life of
- * the session. On a privilege change (login), rotate it explicitly with
- * {@see rotate()} — regenerating the session id alone is not enough, because
- * {@see SessionInterface::regenerate()} keeps the data, this token included.
+ * constant time against whatever an unsafe request submits
  */
 final class CsrfGuard
 {

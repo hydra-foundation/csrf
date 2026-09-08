@@ -8,12 +8,9 @@ use Hydra\Http\Exceptions\HttpException;
 use Throwable;
 
 /**
- * An unsafe request arrived without a valid CSRF token: HTTP 403.
+ * Token mismatch exception
  *
- * Like the http package's own NotFoundException, this is a typed HttpException
- * so the application's outermost ErrorHandlerMiddleware renders it consistently
- * — the guard middleware just throws, it never builds a response itself. The
- * message is developer-authored, so it is safe for the error handler to show.
+ * An unsafe request arrived without a valid CSRF token: HTTP 403
  */
 final class TokenMismatchException extends HttpException
 {
